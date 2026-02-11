@@ -1,12 +1,19 @@
-// Particle System
-const canvas = document.getElementById('particleCanvas');
-const ctx = canvas.getContext('2d');
+// Performance first: disable heavy canvas particles (scroll smoothness)
+const ENABLE_PARTICLES = false;
 
-canvas.width = window.innerWidth;
-canvas.height = window.innerHeight;
+// Particle System (optional)
+const canvas = document.getElementById('particleCanvas');
+const ctx = canvas ? canvas.getContext('2d') : null;
 
 const particles = [];
 const mouse = { x: 0, y: 0 };
+const prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const DPR = Math.min(2, window.devicePixelRatio || 1);
+let particlesRunning = false;
+let isUserScrolling = false;
+let scrollIdleTimer = 0;
+let lastParticleFrame = 0;
+const PARTICLE_FPS = 30; // cap to reduce main-thread work
 
 class Particle {
   constructor() {
@@ -37,12 +44,28 @@ class Particle {
 }
 
 function initParticles() {
-  for (let i = 0; i < 100; i++) {
+  particles.length = 0;
+  // fewer particles + fewer connections = smoother scroll
+  for (let i = 0; i < 38; i++) {
     particles.push(new Particle());
   }
 }
 
 function animateParticles() {
+  if (!particlesRunning) return;
+  if (isUserScrolling) {
+    requestAnimationFrame(animateParticles);
+    return;
+  }
+
+  const now = performance.now();
+  const frameInterval = 1000 / PARTICLE_FPS;
+  if (now - lastParticleFrame < frameInterval) {
+    requestAnimationFrame(animateParticles);
+    return;
+  }
+  lastParticleFrame = now;
+
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   
   particles.forEach(particle => {
@@ -50,34 +73,42 @@ function animateParticles() {
     particle.draw();
   });
 
-  // Draw connections between nearby particles
-  particles.forEach((p1, idx) => {
-    particles.slice(idx + 1).forEach(p2 => {
-      const dx = p1.x - p2.x;
-      const dy = p1.y - p2.y;
-      const distance = Math.sqrt(dx * dx + dy * dy);
-
-      if (distance < 100) {
-        ctx.strokeStyle = `rgba(0, 212, 255, ${0.2 * (1 - distance / 100)})`;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(p1.x, p1.y);
-        ctx.lineTo(p2.x, p2.y);
-        ctx.stroke();
-      }
-    });
-  });
+  // NOTE: connection lines removed for smooth scrolling
 
   requestAnimationFrame(animateParticles);
 }
 
-initParticles();
-animateParticles();
+if (ENABLE_PARTICLES && canvas && ctx) {
+  canvas.width = Math.floor(window.innerWidth * DPR);
+  canvas.height = Math.floor(window.innerHeight * DPR);
+  canvas.style.width = `${window.innerWidth}px`;
+  canvas.style.height = `${window.innerHeight}px`;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 
-window.addEventListener('resize', () => {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-});
+  initParticles();
+  if (!prefersReducedMotion) {
+    particlesRunning = true;
+    animateParticles();
+  }
+
+  window.addEventListener('resize', () => {
+    canvas.width = Math.floor(window.innerWidth * DPR);
+    canvas.height = Math.floor(window.innerHeight * DPR);
+    canvas.style.width = `${window.innerWidth}px`;
+    canvas.style.height = `${window.innerHeight}px`;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    initParticles();
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (prefersReducedMotion) return;
+    particlesRunning = !document.hidden;
+    if (particlesRunning) requestAnimationFrame(animateParticles);
+  });
+} else if (canvas) {
+  // Hide canvas entirely to avoid extra compositing work
+  canvas.style.display = 'none';
+}
 
 // Page Load Animation
 const reveals = document.querySelectorAll(".reveal");
@@ -102,8 +133,17 @@ const observer = new IntersectionObserver(
 
 reveals.forEach(el => observer.observe(el));
 
-// Mouse tracking for enhanced interactivity
-document.addEventListener('mousemove', (e) => {
-  mouse.x = e.clientX;
-  mouse.y = e.clientY;
+window.addEventListener("load", () => {
+  const loader = document.getElementById("loader");
+  if (!loader) return;
+
+  // quicker + smoother exit
+  const exitDelay = prefersReducedMotion ? 400 : 1100;
+  setTimeout(() => {
+    loader.style.transition = "opacity 450ms ease";
+    loader.style.opacity = "0";
+    loader.style.pointerEvents = "none";
+    setTimeout(() => loader.remove(), 520);
+  }, exitDelay);
 });
+
